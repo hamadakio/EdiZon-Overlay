@@ -32,12 +32,13 @@
 
 #include "utils.hpp"
 #include "cheat.hpp"
+#include "cheat_downloader.hpp"
 
 #include <unistd.h>
 #include <netinet/in.h>
 
 class GuiCheats;
-
+class GuiSelectDbVersion;
 class GuiStats;
 
 class GuiMain : public tsl::Gui {
@@ -68,13 +69,38 @@ public:
             auto cheatsItem = new tsl::elm::ListItem("Cheats");
             cheatsItem->setClickListener([cheatsItem](s64 keys) {
                 if (keys & KEY_A) {
-                    //tsl::shiftItemFocus(cheatsItem);
                     tsl::changeTo<GuiCheats>("");
                     return true;
                 }
                 return false;
             });
             list->addItem(cheatsItem);
+
+            if (edz::cheat::CheatManager::getProcessID() != 0) {
+                auto downloadCheatsItem = new tsl::elm::ListItem("Download Cheats (Current Version)");
+                downloadCheatsItem->setClickListener([](s64 keys) {
+                    if (keys & KEY_A) {
+                        u64 tid = edz::cheat::CheatManager::getTitleID();
+                        u64 bid = edz::cheat::CheatManager::getBuildID();
+                        auto res = edz::cheat::CheatDownloader::downloadCheatsForGame(tid, bid);
+                        if (res.status == edz::cheat::CheatDownloadStatus::Success) {
+                            ult::pushNotificationJson(APP_TITLE, res.message);
+                            tsl::changeTo<GuiCheats>("");
+                            return true;
+                        } else if (res.status == edz::cheat::CheatDownloadStatus::BuildIdNotFound) {
+                            ult::pushNotificationJson(APP_TITLE, "BID not in DB! Available: " + std::to_string(res.availableBuildIds.size()));
+                            if (!res.availableBuildIds.empty()) {
+                                tsl::changeTo<GuiSelectDbVersion>(res.availableBuildIds);
+                                return true;
+                            }
+                        } else {
+                            ult::pushNotificationJson(APP_TITLE, res.message);
+                        }
+                    }
+                    return false;
+                });
+                list->addItem(downloadCheatsItem);
+            }
         } else {
             auto noDmntSvc = new tsl::elm::ListItem("Cheat Service Unavailable!");
             list->addItem(noDmntSvc);
@@ -83,7 +109,6 @@ public:
         auto statsItem  = new tsl::elm::ListItem("System Information");
         statsItem->setClickListener([statsItem](s64 keys) {
             if (keys & KEY_A) {
-                //tsl::shiftItemFocus(statsItem);
                 tsl::changeTo<GuiStats>();
                 return true;
             }
@@ -91,7 +116,6 @@ public:
         });
         list->addItem(statsItem);
 
-        //list->disableCaching();
         rootFrame->setContent(list);
         return rootFrame;
     }
@@ -113,16 +137,12 @@ public:
     }
     ~GuiCheats() { }
 
-
     virtual tsl::elm::Element* createUI() override {
         auto rootFrame = new tsl::elm::HeaderOverlayFrame(97);
-
-       // bool setOnce = true; // for ensuring header sync with frame caching for header overlayframe
 
         rootFrame->setHeader(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
             renderer->drawString(APP_TITLE, false, 20, 50, 32, (tsl::defaultOverlayColor));
             renderer->drawString("Cheats", false, 20, 52+23, 15, (tsl::bannerVersionTextColor));
-            
 
             if (edz::cheat::CheatManager::getProcessID() != 0) {
                 renderer->drawString("Program ID", false, 150 +14, 40 -6, 15, (tsl::style::color::ColorText));
@@ -135,21 +155,100 @@ public:
         }));
 
         if (edz::cheat::CheatManager::getCheats().size() == 0) {
-            auto warning = new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *renderer, u16 x, u16 y, u16 w, u16 h){
-                static const auto iconWidth = renderer->getTextDimensions("\uE150", false, 90).first;
-                static const auto textWidth = renderer->getTextDimensions("No Cheats loaded!", false, 25).first;
-                renderer->drawString("\uE150", false, (tsl::cfg::FramebufferWidth - iconWidth) / 2, 274, 90, (0xFFFF));
-                renderer->drawString("No Cheats loaded!", false, (tsl::cfg::FramebufferWidth - textWidth) / 2, 360, 25, (0xFFFF));
-            });
+            auto list = new tsl::elm::List();
+            list->addItem(new tsl::elm::CategoryHeader("No cheats for current Build ID"));
 
-            rootFrame->setContent(warning);
+            if (edz::cheat::CheatManager::getProcessID() != 0) {
+                auto dlItem = new tsl::elm::ListItem("Download Cheats (Current BID)");
+                dlItem->setClickListener([](s64 keys) {
+                    if (keys & KEY_A) {
+                        u64 tid = edz::cheat::CheatManager::getTitleID();
+                        u64 bid = edz::cheat::CheatManager::getBuildID();
+                        auto res = edz::cheat::CheatDownloader::downloadCheatsForGame(tid, bid);
+                        if (res.status == edz::cheat::CheatDownloadStatus::Success) {
+                            ult::pushNotificationJson(APP_TITLE, res.message);
+                            tsl::changeTo<GuiCheats>("");
+                            return true;
+                        } else if (res.status == edz::cheat::CheatDownloadStatus::BuildIdNotFound) {
+                            ult::pushNotificationJson(APP_TITLE, "BID not in DB! Available: " + std::to_string(res.availableBuildIds.size()));
+                            if (!res.availableBuildIds.empty()) {
+                                tsl::changeTo<GuiSelectDbVersion>(res.availableBuildIds);
+                                return true;
+                            }
+                        } else {
+                            ult::pushNotificationJson(APP_TITLE, res.message);
+                        }
+                    }
+                    return false;
+                });
+                list->addItem(dlItem);
+
+                u64 tid = edz::cheat::CheatManager::getTitleID();
+                u64 bid = edz::cheat::CheatManager::getBuildID();
+                std::string curBidHex = GuiMain::s_runningBuildIDString;
+                auto localBids = edz::cheat::CheatDownloader::getLocalCheatBuildIDs(tid);
+                std::vector<std::string> otherBids;
+                for (auto &b : localBids) {
+                    if (b != curBidHex) otherBids.push_back(b);
+                }
+
+                if (!otherBids.empty()) {
+                    list->addItem(new tsl::elm::CategoryHeader("Local Cheats (Other Versions)"));
+                    for (auto &otherBid : otherBids) {
+                        auto copyItem = new tsl::elm::ListItem("Copy from " + otherBid);
+                        copyItem->setClickListener([tid, otherBid, bid](s64 keys) {
+                            if (keys & KEY_A) {
+                                if (edz::cheat::CheatDownloader::copyLocalCheatToCurrent(tid, otherBid, bid)) {
+                                    ult::pushNotificationJson(APP_TITLE, "Copied cheats from " + otherBid);
+                                    tsl::changeTo<GuiCheats>("");
+                                    return true;
+                                } else {
+                                    ult::pushNotificationJson(APP_TITLE, "Failed to copy cheats");
+                                }
+                            }
+                            return false;
+                        });
+                        list->addItem(copyItem);
+                    }
+                }
+            } else {
+                list->addItem(new tsl::elm::ListItem("No Game Running!"));
+            }
+
+            rootFrame->setContent(list);
 
         } else {
             auto list = new tsl::elm::List();
             std::string head = "Section: " + this->m_section;
 
             if(m_section.length() > 0) list->addItem(new tsl::elm::CategoryHeader(head));
-            else list->addItem(new tsl::elm::CategoryHeader("Available cheats"));
+            else {
+                list->addItem(new tsl::elm::CategoryHeader("Available cheats"));
+
+                auto updateItem = new tsl::elm::ListItem("Update Cheats from Database");
+                updateItem->setClickListener([](s64 keys) {
+                    if (keys & KEY_A) {
+                        u64 tid = edz::cheat::CheatManager::getTitleID();
+                        u64 bid = edz::cheat::CheatManager::getBuildID();
+                        auto res = edz::cheat::CheatDownloader::downloadCheatsForGame(tid, bid);
+                        if (res.status == edz::cheat::CheatDownloadStatus::Success) {
+                            ult::pushNotificationJson(APP_TITLE, res.message);
+                            tsl::changeTo<GuiCheats>("");
+                            return true;
+                        } else if (res.status == edz::cheat::CheatDownloadStatus::BuildIdNotFound) {
+                            ult::pushNotificationJson(APP_TITLE, "BID not in DB! Available: " + std::to_string(res.availableBuildIds.size()));
+                            if (!res.availableBuildIds.empty()) {
+                                tsl::changeTo<GuiSelectDbVersion>(res.availableBuildIds);
+                                return true;
+                            }
+                        } else {
+                            ult::pushNotificationJson(APP_TITLE, res.message);
+                        }
+                    }
+                    return false;
+                });
+                list->addItem(updateItem);
+            }
 
             bool skip = false, inSection = false, submenus = true;
             std::string skipUntil = "";
@@ -176,7 +275,6 @@ public:
                         auto cheatsSubmenu = new tsl::elm::ListItem(name);
                         cheatsSubmenu->setClickListener([name = name, cheatsSubmenu](s64 keys) {
                             if (keys & KEY_A) {
-                                //tsl::shiftItemFocus(cheatsSubmenu);
                                 tsl::changeTo<GuiCheats>(name);
                                 return true;
                             }
@@ -199,7 +297,7 @@ public:
                         std::string cheatNameCheck = cheat->getName();
                         replaceAll(cheatNameCheck, ":ENABLED", "");
 
-                        auto cheatToggleItem = new tsl::elm::ToggleListItem(/*formatString("%d:%s: %s", cheat->getID(), (cheat->isEnabled() ? "y" : "n"),*/ cheatNameCheck/*.c_str()).c_str()*/, cheat->isEnabled());
+                        auto cheatToggleItem = new tsl::elm::ToggleListItem(cheatNameCheck, cheat->isEnabled());
                         cheatToggleItem->setStateChangedListener([&cheat](bool state) { cheat->setState(state);});
 
                         this->m_cheatToggleItems.insert({cheat->getID(), cheatToggleItem});
@@ -221,8 +319,6 @@ public:
                     this->m_numCheats++;
                 }
             }
-
-            //list->disableCaching();
 
             // display if no cheats in submenu
             if(this->m_numCheats < 1){
@@ -262,6 +358,59 @@ private:
     std::string m_section;
     std::map<u32, tsl::elm::ToggleListItem*> m_cheatToggleItems;
 };
+
+
+class GuiSelectDbVersion : public tsl::Gui {
+public:
+    GuiSelectDbVersion(const std::vector<std::string>& versions) : m_versions(versions) { }
+    ~GuiSelectDbVersion() { }
+
+    virtual tsl::elm::Element* createUI() override {
+        auto rootFrame = new tsl::elm::HeaderOverlayFrame(97);
+        rootFrame->setHeader(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *renderer, s32 x, s32 y, s32 w, s32 h) {
+            renderer->drawString(APP_TITLE, false, 20, 50, 32, (tsl::defaultOverlayColor));
+            renderer->drawString("Select DB Version", false, 20, 52+23, 15, (tsl::bannerVersionTextColor));
+
+            if (edz::cheat::CheatManager::getProcessID() != 0) {
+                renderer->drawString("Target BID", false, 150 + 14, 40 - 6, 15, (tsl::style::color::ColorText));
+                renderer->drawString(GuiMain::s_runningBuildIDString.c_str(), false, 250 + 14, 40 - 6, 15, (tsl::style::color::ColorHighlight));
+            }
+        }));
+
+        auto list = new tsl::elm::List();
+        list->addItem(new tsl::elm::CategoryHeader("Available versions in DB:"));
+
+        u64 tid = edz::cheat::CheatManager::getTitleID();
+        u64 bid = edz::cheat::CheatManager::getBuildID();
+
+        for (const auto& ver : m_versions) {
+            auto item = new tsl::elm::ListItem(ver);
+            item->setClickListener([ver, tid, bid](s64 keys) {
+                if (keys & KEY_A) {
+                    auto res = edz::cheat::CheatDownloader::applyCheatsFromDbVersion(tid, ver, bid);
+                    if (res.status == edz::cheat::CheatDownloadStatus::Success) {
+                        ult::pushNotificationJson(APP_TITLE, res.message);
+                        tsl::changeTo<GuiCheats>("");
+                        return true;
+                    } else {
+                        ult::pushNotificationJson(APP_TITLE, res.message);
+                    }
+                }
+                return false;
+            });
+            list->addItem(item);
+        }
+
+        rootFrame->setContent(list);
+        return rootFrame;
+    }
+
+    virtual void update() override { }
+
+private:
+    std::vector<std::string> m_versions;
+};
+
 
 class GuiStats : public tsl::Gui {
 public:

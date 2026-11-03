@@ -1,6 +1,9 @@
-name: Release
+name: Build and Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       branch:
@@ -13,11 +16,14 @@ jobs:
     name: Build and release
     runs-on: ubuntu-22.04
     container: devkitpro/devkita64:20250728
+    permissions:
+      contents: write
     steps:
       - name: Update packages
         run: |
           sudo -n apt-get update
           sudo -n apt-get install -y build-essential zip python3 python3-pip python3-lz4
+          sudo dkp-pacman -S --noconfirm switch-curl switch-zlib switch-minizip switch-mbedtls
         shell: bash
       - name: Update latest libnx
         run: |
@@ -53,8 +59,16 @@ jobs:
           export DEVKITPRO=/opt/devkitpro
           make all
         shell: bash
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EdiZon-Overlay
+          path: |
+            ./SdOut/EdiZon-Overlay.zip
+            ./SdOut/switch/.overlays/ovlEdiZon.ovl
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2.4.1
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
           name: ${{ env.RELEASE_NAME }}
           tag_name: ${{ env.TAG }}

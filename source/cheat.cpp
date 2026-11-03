@@ -398,4 +398,12 @@ namespace edz::cheat {
         return res;
     }
 
+    Result CheatManager::forceReloadFromDisk() {
+        if (!CheatManager::isCheatServiceAvailable())
+            return ResultEdzCheatServiceNotAvailable;
+
+        dmntchtForceCloseCheatProcess();
+        return CheatManager::reload();
+    }
+
 }
